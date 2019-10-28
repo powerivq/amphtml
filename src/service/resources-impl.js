@@ -16,22 +16,19 @@
 
 import {Deferred} from '../utils/promise';
 import {FiniteStateMachine} from '../finite-state-machine';
-import {FocusHistory} from '../focus-history';
 import {Pass} from '../pass';
 import {READY_SCAN_SIGNAL, ResourcesInterface} from './resources-interface';
 import {Resource, ResourceState} from './resource';
 import {Services} from '../services';
 import {TaskQueue} from './task-queue';
 import {VisibilityState} from '../visibility-state';
-import {areMarginsChanged, expandLayoutRect} from '../layout-rect';
-import {closest, hasNextNodeInDocumentOrder} from '../dom';
-import {computedStyle} from '../style';
 import {dev, devAssert} from '../log';
 import {dict} from '../utils/object';
+import {expandLayoutRect} from '../layout-rect';
 import {getSourceUrl} from '../url';
+import {hasNextNodeInDocumentOrder} from '../dom';
 import {checkAndFix as ieMediaCheckAndFix} from './ie-media-bug';
 import {isBlockedByConsent, reportError} from '../error';
-import {isExperimentOn} from '../experiments';
 import {loadPromise} from '../event-helper';
 import {registerServiceBuilderForDoc} from '../service';
 import {remove} from '../utils/array';
@@ -46,8 +43,6 @@ const PRIORITY_BASE_ = 10;
 const PRIORITY_PENALTY_TIME_ = 1000;
 const POST_TASK_PASS_DELAY_ = 1000;
 const MUTATE_DEFER_DELAY_ = 500;
-const FOCUS_HISTORY_TIMEOUT_ = 1000 * 60; // 1min
-const FOUR_FRAME_DELAY_ = 70;
 
 /**
  * The internal structure of a ChangeHeightRequest.
@@ -189,9 +184,6 @@ export class ResourcesImpl {
     /** @private @const {!./vsync-impl.Vsync} */
     this.vsync_ = Services./*OK*/ vsyncFor(this.win);
 
-    /** @private @const {!FocusHistory} */
-    this.activeHistory_ = new FocusHistory(this.win, FOCUS_HISTORY_TIMEOUT_);
-
     /** @private {boolean} */
     this.vsyncScheduled_ = false;
 
@@ -239,10 +231,6 @@ export class ResourcesImpl {
       dev().fine(TAG_, 'Runtime state:', state);
       this.isRuntimeOn_ = state;
       this.schedulePass(1);
-    });
-
-    this.activeHistory_.onFocus(element => {
-      this.checkPendingChangeSize_(element);
     });
 
     // Schedule initial passes. This must happen in a startup task
@@ -555,186 +543,6 @@ export class ResourcesImpl {
   }
 
   /** @override */
-  changeSize(element, newHeight, newWidth, opt_callback, opt_newMargins) {
-    this.scheduleChangeSize_(
-      Resource.forElement(element),
-      newHeight,
-      newWidth,
-      opt_newMargins,
-      /* event */ undefined,
-      /* force */ true,
-      opt_callback
-    );
-  }
-
-  /** @override */
-  attemptChangeSize(element, newHeight, newWidth, opt_newMargins, opt_event) {
-    return new Promise((resolve, reject) => {
-      this.scheduleChangeSize_(
-        Resource.forElement(element),
-        newHeight,
-        newWidth,
-        opt_newMargins,
-        opt_event,
-        /* force */ false,
-        success => {
-          if (success) {
-            resolve();
-          } else {
-            reject(new Error('changeSize attempt denied'));
-          }
-        }
-      );
-    });
-  }
-
-  /** @override */
-  measureElement(measurer) {
-    return this.vsync_.measurePromise(measurer);
-  }
-
-  /** @override */
-  mutateElement(element, mutator) {
-    return this.measureMutateElement(element, null, mutator);
-  }
-
-  /** @override */
-  measureMutateElement(element, measurer, mutator) {
-    return this.measureMutateElementResources_(element, measurer, mutator);
-  }
-
-  /**
-   * Handles element mutation (and measurement) APIs in the Resources system.
-   *
-   * @param {!Element} element
-   * @param {?function()} measurer
-   * @param {function()} mutator
-   * @return {!Promise}
-   */
-  measureMutateElementResources_(element, measurer, mutator) {
-    const calcRelayoutTop = () => {
-      const box = this.viewport_.getLayoutRect(element);
-      if (box.width != 0 && box.height != 0) {
-        return box.top;
-      }
-      return -1;
-    };
-    let relayoutTop = -1;
-    // TODO(jridgewell): support state
-    return this.vsync_.runPromise({
-      measure: () => {
-        if (measurer) {
-          measurer();
-        }
-        relayoutTop = calcRelayoutTop();
-      },
-      mutate: () => {
-        mutator();
-
-        if (element.classList.contains('i-amphtml-element')) {
-          const r = Resource.forElement(element);
-          r.requestMeasure();
-        }
-        const ampElements = element.getElementsByClassName('i-amphtml-element');
-        for (let i = 0; i < ampElements.length; i++) {
-          const r = Resource.forElement(ampElements[i]);
-          r.requestMeasure();
-        }
-        if (relayoutTop != -1) {
-          this.setRelayoutTop_(relayoutTop);
-        }
-        this.schedulePass(FOUR_FRAME_DELAY_);
-
-        // Need to measure again in case the element has become visible or
-        // shifted.
-        this.vsync_.measure(() => {
-          const updatedRelayoutTop = calcRelayoutTop();
-          if (updatedRelayoutTop != -1 && updatedRelayoutTop != relayoutTop) {
-            this.setRelayoutTop_(updatedRelayoutTop);
-            this.schedulePass(FOUR_FRAME_DELAY_);
-          }
-          this.maybeChangeHeight_ = true;
-        });
-      },
-    });
-  }
-
-  /**
-   * Dirties the cached element measurements after a mutation occurs.
-   *
-   * TODO(jridgewell): This API needs to be audited. Common practice is
-   * to pass the amp-element in as the root even though we are only
-   * mutating children. If the amp-element is passed, we invalidate
-   * everything in the parent layer above it, where only invalidating the
-   * amp-element was necessary (only children were mutated, only
-   * amp-element's scroll box is affected).
-   *
-   * @param {!Element} element
-   */
-  dirtyElement(element) {
-    let relayoutAll = false;
-    const isAmpElement = element.classList.contains('i-amphtml-element');
-    if (isAmpElement) {
-      const r = Resource.forElement(element);
-      this.setRelayoutTop_(r.getLayoutBox().top);
-    } else {
-      relayoutAll = true;
-    }
-    this.schedulePass(FOUR_FRAME_DELAY_, relayoutAll);
-  }
-
-  /** @override */
-  attemptCollapse(element) {
-    return new Promise((resolve, reject) => {
-      this.scheduleChangeSize_(
-        Resource.forElement(element),
-        0,
-        0,
-        /* newMargin */ undefined,
-        /* event */ undefined,
-        /* force */ false,
-        success => {
-          if (success) {
-            const resource = Resource.forElement(element);
-            resource.completeCollapse();
-            resolve();
-          } else {
-            reject(dev().createExpectedError('collapse attempt denied'));
-          }
-        }
-      );
-    });
-  }
-
-  /** @override */
-  collapseElement(element) {
-    const box = this.viewport_.getLayoutRect(element);
-    const resource = Resource.forElement(element);
-    if (box.width != 0 && box.height != 0) {
-      if (isExperimentOn(this.win, 'dirty-collapse-element')) {
-        this.dirtyElement(element);
-      } else {
-        this.setRelayoutTop_(box.top);
-      }
-    }
-    resource.completeCollapse();
-    this.schedulePass(FOUR_FRAME_DELAY_);
-  }
-
-  /** @override */
-  expandElement(element) {
-    const resource = Resource.forElement(element);
-    resource.completeExpand();
-
-    const owner = resource.getOwner();
-    if (owner) {
-      owner.expandedCallback(element);
-    }
-
-    this.schedulePass(FOUR_FRAME_DELAY_);
-  }
-
-  /** @override */
   schedulePass(opt_delay, opt_relayoutAll) {
     if (opt_relayoutAll) {
       this.relayoutAll_ = true;
@@ -742,11 +550,30 @@ export class ResourcesImpl {
     return this.pass_.schedule(opt_delay);
   }
 
-  /**
-   * Schedules the work pass at the latest with the specified delay.
-   * @private
-   */
-  schedulePassVsync_() {
+  /** @override */
+  updateOrEnqueueMutateTask(resource, newRequest) {
+    let request = null;
+    for (let i = 0; i < this.requestsChangeSize_.length; i++) {
+      if (this.requestsChangeSize_[i].resource == resource) {
+        request = this.requestsChangeSize_[i];
+        break;
+      }
+    }
+
+    if (request) {
+      request.newHeight = newRequest.newHeight;
+      request.newWidth = newRequest.newWidth;
+      request.marginChange = newRequest.marginChange;
+      request.event = newRequest.event;
+      request.force = newRequest.force || request.force;
+      request.callback = newRequest.callback;
+    } else {
+      this.requestsChangeSize_.push(newRequest);
+    }
+  }
+
+  /** @override */
+  schedulePassVsync() {
     if (this.vsyncScheduled_) {
       return;
     }
@@ -869,331 +696,6 @@ export class ResourcesImpl {
    */
   hasMutateWork_() {
     return this.requestsChangeSize_.length > 0;
-  }
-
-  /**
-   * Performs pre-discovery mutates.
-   * @private
-   */
-  mutateWork_() {
-    // Read all necessary data before mutates.
-    // The height changing depends largely on the target element's position
-    // in the active viewport. When not in prerendering, we also consider the
-    // active viewport the part of the visible viewport below 10% from the top
-    // and above 25% from the bottom.
-    // This is basically the portion of the viewport where the reader is most
-    // likely focused right now. The main goal is to avoid drastic UI changes
-    // in that part of the content. The elements below the active viewport are
-    // freely resized. The elements above the viewport are resized and request
-    // scroll adjustment to avoid active viewport changing without user's
-    // action. The elements in the active viewport are not resized and instead
-    // the overflow callbacks are called.
-    const now = Date.now();
-    const viewportRect = this.viewport_.getRect();
-    const topOffset = viewportRect.height / 10;
-    const bottomOffset = viewportRect.height / 10;
-    const isScrollingStopped =
-      (Math.abs(this.lastVelocity_) < 1e-2 &&
-        now - this.lastScrollTime_ > MUTATE_DEFER_DELAY_) ||
-      now - this.lastScrollTime_ > MUTATE_DEFER_DELAY_ * 2;
-
-    // TODO(jridgewell, #12780): Update resize rules to account for layers.
-    if (this.requestsChangeSize_.length > 0) {
-      dev().fine(
-        TAG_,
-        'change size requests:',
-        this.requestsChangeSize_.length
-      );
-      const requestsChangeSize = this.requestsChangeSize_;
-      this.requestsChangeSize_ = [];
-
-      // Find minimum top position and run all mutates.
-      let minTop = -1;
-      const scrollAdjSet = [];
-      let aboveVpHeightChange = 0;
-      for (let i = 0; i < requestsChangeSize.length; i++) {
-        const request = requestsChangeSize[i];
-        const {
-          resource,
-          event,
-        } = /** @type {!ChangeSizeRequestDef} */ (request);
-        const box = resource.getLayoutBox();
-
-        let topMarginDiff = 0;
-        let bottomMarginDiff = 0;
-        let leftMarginDiff = 0;
-        let rightMarginDiff = 0;
-        let {top: topUnchangedBoundary, bottom: bottomDisplacedBoundary} = box;
-        let newMargins = undefined;
-        if (request.marginChange) {
-          newMargins = request.marginChange.newMargins;
-          const margins = request.marginChange.currentMargins;
-          if (newMargins.top != undefined) {
-            topMarginDiff = newMargins.top - margins.top;
-          }
-          if (newMargins.bottom != undefined) {
-            bottomMarginDiff = newMargins.bottom - margins.bottom;
-          }
-          if (newMargins.left != undefined) {
-            leftMarginDiff = newMargins.left - margins.left;
-          }
-          if (newMargins.right != undefined) {
-            rightMarginDiff = newMargins.right - margins.right;
-          }
-          if (topMarginDiff) {
-            topUnchangedBoundary = box.top - margins.top;
-          }
-          if (bottomMarginDiff) {
-            // The lowest boundary of the element that would appear to be
-            // resized as a result of this size change. If the bottom margin is
-            // being changed then it is the bottom edge of the margin box,
-            // otherwise it is the bottom edge of the layout box as set above.
-            bottomDisplacedBoundary = box.bottom + margins.bottom;
-          }
-        }
-        const heightDiff = request.newHeight - box.height;
-        const widthDiff = request.newWidth - box.width;
-
-        // Check resize rules. It will either resize element immediately, or
-        // wait until scrolling stops or will call the overflow callback.
-        let resize = false;
-        if (
-          heightDiff == 0 &&
-          topMarginDiff == 0 &&
-          bottomMarginDiff == 0 &&
-          widthDiff == 0 &&
-          leftMarginDiff == 0 &&
-          rightMarginDiff == 0
-        ) {
-          // 1. Nothing to resize.
-        } else if (request.force || !this.visible_) {
-          // 2. An immediate execution requested or the document is hidden.
-          resize = true;
-        } else if (
-          this.activeHistory_.hasDescendantsOf(resource.element) ||
-          (event && event.userActivation && event.userActivation.hasBeenActive)
-        ) {
-          // 3. Active elements are immediately resized. The assumption is that
-          // the resize is triggered by the user action or soon after.
-          resize = true;
-        } else if (
-          topUnchangedBoundary >= viewportRect.bottom - bottomOffset ||
-          (topMarginDiff == 0 &&
-            box.bottom + Math.min(heightDiff, 0) >=
-              viewportRect.bottom - bottomOffset)
-        ) {
-          // 4. Elements under viewport are resized immediately, but only if
-          // an element's boundary is not changed above the viewport after
-          // resize.
-          resize = true;
-        } else if (
-          viewportRect.top > 1 &&
-          bottomDisplacedBoundary <= viewportRect.top + topOffset
-        ) {
-          // 5. Elements above the viewport can only be resized if we are able
-          // to compensate the height change by setting scrollTop and only if
-          // the page has already been scrolled by some amount (1px due to iOS).
-          // Otherwise the scrolling might move important things like the menu
-          // bar out of the viewport at initial page load.
-          if (
-            heightDiff < 0 &&
-            viewportRect.top + aboveVpHeightChange < -heightDiff
-          ) {
-            // Do nothing if height abobe viewport height can't compensate
-            // height decrease
-            continue;
-          }
-          // Can only resized when scrollinghas stopped,
-          // otherwise defer util next cycle.
-          if (isScrollingStopped) {
-            // These requests will be executed in the next animation cycle and
-            // adjust the scroll position.
-            aboveVpHeightChange = aboveVpHeightChange + heightDiff;
-            scrollAdjSet.push(request);
-          } else {
-            // Defer till next cycle.
-            this.requestsChangeSize_.push(request);
-          }
-          continue;
-        } else if (this.elementNearBottom_(resource, box)) {
-          // 6. Elements close to the bottom of the document (not viewport)
-          // are resized immediately.
-          resize = true;
-        } else if (
-          heightDiff < 0 ||
-          topMarginDiff < 0 ||
-          bottomMarginDiff < 0
-        ) {
-          // 7. The new height (or one of the margins) is smaller than the
-          // current one.
-        } else if (
-          request.newHeight == box.height &&
-          this.isWidthOnlyReflowFreeExpansion_(
-            resource.element,
-            request.newWidth || 0
-          )
-        ) {
-          // 8. Element is in viewport, but this is a width-only expansion that
-          // should not cause reflow.
-          resize = true;
-        } else {
-          // 9. Element is in viewport don't resize and try overflow callback
-          // instead.
-          request.resource.overflowCallback(
-            /* overflown */ true,
-            request.newHeight,
-            request.newWidth,
-            newMargins
-          );
-        }
-
-        if (resize) {
-          if (box.top >= 0) {
-            minTop = minTop == -1 ? box.top : Math.min(minTop, box.top);
-          }
-          request.resource./*OK*/ changeSize(
-            request.newHeight,
-            request.newWidth,
-            newMargins
-          );
-          request.resource.overflowCallback(
-            /* overflown */ false,
-            request.newHeight,
-            request.newWidth,
-            newMargins
-          );
-          this.maybeChangeHeight_ = true;
-        }
-
-        if (request.callback) {
-          request.callback(/* hasSizeChanged */ resize);
-        }
-      }
-
-      if (minTop != -1) {
-        this.setRelayoutTop_(minTop);
-      }
-
-      // Execute scroll-adjusting resize requests, if any.
-      if (scrollAdjSet.length > 0) {
-        this.vsync_.run(
-          {
-            measure: state => {
-              state./*OK*/ scrollHeight = this.viewport_./*OK*/ getScrollHeight();
-              state./*OK*/ scrollTop = this.viewport_./*OK*/ getScrollTop();
-            },
-            mutate: state => {
-              let minTop = -1;
-              scrollAdjSet.forEach(request => {
-                const box = request.resource.getLayoutBox();
-                minTop = minTop == -1 ? box.top : Math.min(minTop, box.top);
-                request.resource./*OK*/ changeSize(
-                  request.newHeight,
-                  request.newWidth,
-                  request.marginChange
-                    ? request.marginChange.newMargins
-                    : undefined
-                );
-                if (request.callback) {
-                  request.callback(/* hasSizeChanged */ true);
-                }
-              });
-              if (minTop != -1) {
-                this.setRelayoutTop_(minTop);
-              }
-              // Sync is necessary here to avoid UI jump in the next frame.
-              const newScrollHeight = this.viewport_./*OK*/ getScrollHeight();
-              if (newScrollHeight != state./*OK*/ scrollHeight) {
-                this.viewport_.setScrollTop(
-                  state./*OK*/ scrollTop +
-                    (newScrollHeight - state./*OK*/ scrollHeight)
-                );
-              }
-              this.maybeChangeHeight_ = true;
-            },
-          },
-          {}
-        );
-      }
-    }
-  }
-
-  /**
-   * Returns true if reflow will not be caused by expanding the given element's
-   * width to the given amount.
-   * @param {!Element} element
-   * @param {number} width
-   * @return {boolean}
-   */
-  isWidthOnlyReflowFreeExpansion_(element, width) {
-    const parent = element.parentElement;
-    // If the element has siblings, it's possible that a width-expansion will
-    // cause some of them to be pushed down.
-    if (!parent || parent.childElementCount > 1) {
-      return false;
-    }
-    const parentWidth =
-      (parent.getImpl && parent.getImpl().getLayoutWidth()) || -1;
-    // Reflow will not happen if the parent element is at least as wide as the
-    // new width.
-    return parentWidth >= width;
-  }
-
-  /**
-   * Returns true if element is within 15% and 1000px of document bottom.
-   * Caller can provide current/initial layout boxes as an optimization.
-   * @param {!./resource.Resource} resource
-   * @param {!../layout-rect.LayoutRectDef=} opt_layoutBox
-   * @param {!../layout-rect.LayoutRectDef=} opt_initialLayoutBox
-   * @return {boolean}
-   * @private
-   */
-  elementNearBottom_(resource, opt_layoutBox, opt_initialLayoutBox) {
-    const contentHeight = this.viewport_.getContentHeight();
-    const threshold = Math.max(contentHeight * 0.85, contentHeight - 1000);
-
-    const box = opt_layoutBox || resource.getLayoutBox();
-    const initialBox = opt_initialLayoutBox || resource.getInitialLayoutBox();
-    return box.bottom >= threshold || initialBox.bottom >= threshold;
-  }
-
-  /**
-   * @param {number} relayoutTop
-   * @private
-   */
-  setRelayoutTop_(relayoutTop) {
-    if (this.relayoutTop_ == -1) {
-      this.relayoutTop_ = relayoutTop;
-    } else {
-      this.relayoutTop_ = Math.min(relayoutTop, this.relayoutTop_);
-    }
-  }
-
-  /**
-   * Reschedules change size request when an overflown element is activated.
-   * @param {!Element} element
-   * @private
-   */
-  checkPendingChangeSize_(element) {
-    const resourceElement = closest(
-      element,
-      el => !!Resource.forElementOptional(el)
-    );
-    if (!resourceElement) {
-      return;
-    }
-    const resource = Resource.forElement(resourceElement);
-    const pendingChangeSize = resource.getPendingChangeSize();
-    if (pendingChangeSize !== undefined) {
-      this.scheduleChangeSize_(
-        resource,
-        pendingChangeSize.height,
-        pendingChangeSize.width,
-        pendingChangeSize.margins,
-        /* event */ undefined,
-        /* force */ true
-      );
-    }
   }
 
   /**
@@ -1485,6 +987,253 @@ export class ResourcesImpl {
   }
 
   /**
+   * Performs pre-discovery mutates.
+   * @private
+   */
+  mutateWork_() {
+    // Read all necessary data before mutates.
+    // The height changing depends largely on the target element's position
+    // in the active viewport. When not in prerendering, we also consider the
+    // active viewport the part of the visible viewport below 10% from the top
+    // and above 25% from the bottom.
+    // This is basically the portion of the viewport where the reader is most
+    // likely focused right now. The main goal is to avoid drastic UI changes
+    // in that part of the content. The elements below the active viewport are
+    // freely resized. The elements above the viewport are resized and request
+    // scroll adjustment to avoid active viewport changing without user's
+    // action. The elements in the active viewport are not resized and instead
+    // the overflow callbacks are called.
+    const now = Date.now();
+    const viewportRect = this.viewport_.getRect();
+    const topOffset = viewportRect.height / 10;
+    const bottomOffset = viewportRect.height / 10;
+    const isScrollingStopped =
+      (Math.abs(this.lastVelocity_) < 1e-2 &&
+        now - this.lastScrollTime_ > MUTATE_DEFER_DELAY_) ||
+      now - this.lastScrollTime_ > MUTATE_DEFER_DELAY_ * 2;
+
+    // TODO(jridgewell, #12780): Update resize rules to account for layers.
+    if (this.requestsChangeSize_.length > 0) {
+      dev().fine(
+        TAG_,
+        'change size requests:',
+        this.requestsChangeSize_.length
+      );
+      const requestsChangeSize = this.requestsChangeSize_;
+      this.requestsChangeSize_ = [];
+
+      // Find minimum top position and run all mutates.
+      let minTop = -1;
+      const scrollAdjSet = [];
+      let aboveVpHeightChange = 0;
+      for (let i = 0; i < requestsChangeSize.length; i++) {
+        const request = requestsChangeSize[i];
+        const {
+          resource,
+          event,
+        } = /** @type {!ChangeSizeRequestDef} */ (request);
+        const box = resource.getLayoutBox();
+
+        let topMarginDiff = 0;
+        let bottomMarginDiff = 0;
+        let leftMarginDiff = 0;
+        let rightMarginDiff = 0;
+        let {top: topUnchangedBoundary, bottom: bottomDisplacedBoundary} = box;
+        let newMargins = undefined;
+        if (request.marginChange) {
+          newMargins = request.marginChange.newMargins;
+          const margins = request.marginChange.currentMargins;
+          if (newMargins.top != undefined) {
+            topMarginDiff = newMargins.top - margins.top;
+          }
+          if (newMargins.bottom != undefined) {
+            bottomMarginDiff = newMargins.bottom - margins.bottom;
+          }
+          if (newMargins.left != undefined) {
+            leftMarginDiff = newMargins.left - margins.left;
+          }
+          if (newMargins.right != undefined) {
+            rightMarginDiff = newMargins.right - margins.right;
+          }
+          if (topMarginDiff) {
+            topUnchangedBoundary = box.top - margins.top;
+          }
+          if (bottomMarginDiff) {
+            // The lowest boundary of the element that would appear to be
+            // resized as a result of this size change. If the bottom margin is
+            // being changed then it is the bottom edge of the margin box,
+            // otherwise it is the bottom edge of the layout box as set above.
+            bottomDisplacedBoundary = box.bottom + margins.bottom;
+          }
+        }
+        const heightDiff = request.newHeight - box.height;
+        const widthDiff = request.newWidth - box.width;
+
+        // Check resize rules. It will either resize element immediately, or
+        // wait until scrolling stops or will call the overflow callback.
+        let resize = false;
+        if (
+          heightDiff == 0 &&
+          topMarginDiff == 0 &&
+          bottomMarginDiff == 0 &&
+          widthDiff == 0 &&
+          leftMarginDiff == 0 &&
+          rightMarginDiff == 0
+        ) {
+          // 1. Nothing to resize.
+        } else if (request.force || !this.visible_) {
+          // 2. An immediate execution requested or the document is hidden.
+          resize = true;
+        } else if (
+          this.activeHistory_.hasDescendantsOf(resource.element) ||
+          (event && event.userActivation && event.userActivation.hasBeenActive)
+        ) {
+          // 3. Active elements are immediately resized. The assumption is that
+          // the resize is triggered by the user action or soon after.
+          resize = true;
+        } else if (
+          topUnchangedBoundary >= viewportRect.bottom - bottomOffset ||
+          (topMarginDiff == 0 &&
+            box.bottom + Math.min(heightDiff, 0) >=
+              viewportRect.bottom - bottomOffset)
+        ) {
+          // 4. Elements under viewport are resized immediately, but only if
+          // an element's boundary is not changed above the viewport after
+          // resize.
+          resize = true;
+        } else if (
+          viewportRect.top > 1 &&
+          bottomDisplacedBoundary <= viewportRect.top + topOffset
+        ) {
+          // 5. Elements above the viewport can only be resized if we are able
+          // to compensate the height change by setting scrollTop and only if
+          // the page has already been scrolled by some amount (1px due to iOS).
+          // Otherwise the scrolling might move important things like the menu
+          // bar out of the viewport at initial page load.
+          if (
+            heightDiff < 0 &&
+            viewportRect.top + aboveVpHeightChange < -heightDiff
+          ) {
+            // Do nothing if height abobe viewport height can't compensate
+            // height decrease
+            continue;
+          }
+          // Can only resized when scrollinghas stopped,
+          // otherwise defer util next cycle.
+          if (isScrollingStopped) {
+            // These requests will be executed in the next animation cycle and
+            // adjust the scroll position.
+            aboveVpHeightChange = aboveVpHeightChange + heightDiff;
+            scrollAdjSet.push(request);
+          } else {
+            // Defer till next cycle.
+            this.requestsChangeSize_.push(request);
+          }
+          continue;
+        } else if (this.elementNearBottom_(resource, box)) {
+          // 6. Elements close to the bottom of the document (not viewport)
+          // are resized immediately.
+          resize = true;
+        } else if (
+          heightDiff < 0 ||
+          topMarginDiff < 0 ||
+          bottomMarginDiff < 0
+        ) {
+          // 7. The new height (or one of the margins) is smaller than the
+          // current one.
+        } else if (
+          request.newHeight == box.height &&
+          this.isWidthOnlyReflowFreeExpansion_(
+            resource.element,
+            request.newWidth || 0
+          )
+        ) {
+          // 8. Element is in viewport, but this is a width-only expansion that
+          // should not cause reflow.
+          resize = true;
+        } else {
+          // 9. Element is in viewport don't resize and try overflow callback
+          // instead.
+          request.resource.overflowCallback(
+            /* overflown */ true,
+            request.newHeight,
+            request.newWidth,
+            newMargins
+          );
+        }
+
+        if (resize) {
+          if (box.top >= 0) {
+            minTop = minTop == -1 ? box.top : Math.min(minTop, box.top);
+          }
+          request.resource./*OK*/ changeSize(
+            request.newHeight,
+            request.newWidth,
+            newMargins
+          );
+          request.resource.overflowCallback(
+            /* overflown */ false,
+            request.newHeight,
+            request.newWidth,
+            newMargins
+          );
+          this.maybeChangeHeight_ = true;
+        }
+
+        if (request.callback) {
+          request.callback(/* hasSizeChanged */ resize);
+        }
+      }
+
+      if (minTop != -1) {
+        this.setRelayoutTop_(minTop);
+      }
+
+      // Execute scroll-adjusting resize requests, if any.
+      if (scrollAdjSet.length > 0) {
+        this.vsync_.run(
+          {
+            measure: state => {
+              state./*OK*/ scrollHeight = this.viewport_./*OK*/ getScrollHeight();
+              state./*OK*/ scrollTop = this.viewport_./*OK*/ getScrollTop();
+            },
+            mutate: state => {
+              let minTop = -1;
+              scrollAdjSet.forEach(request => {
+                const box = request.resource.getLayoutBox();
+                minTop = minTop == -1 ? box.top : Math.min(minTop, box.top);
+                request.resource./*OK*/ changeSize(
+                  request.newHeight,
+                  request.newWidth,
+                  request.marginChange
+                    ? request.marginChange.newMargins
+                    : undefined
+                );
+                if (request.callback) {
+                  request.callback(/* hasSizeChanged */ true);
+                }
+              });
+              if (minTop != -1) {
+                this.setRelayoutTop_(minTop);
+              }
+              // Sync is necessary here to avoid UI jump in the next frame.
+              const newScrollHeight = this.viewport_./*OK*/ getScrollHeight();
+              if (newScrollHeight != state./*OK*/ scrollHeight) {
+                this.viewport_.setScrollTop(
+                  state./*OK*/ scrollTop +
+                    (newScrollHeight - state./*OK*/ scrollHeight)
+                );
+              }
+              this.maybeChangeHeight_ = true;
+            },
+          },
+          {}
+        );
+      }
+    }
+  }
+
+  /**
    * Calculates the task's score. A task with the lowest score will be dequeued
    * from the queue the first.
    *
@@ -1570,6 +1319,45 @@ export class ResourcesImpl {
   }
 
   /**
+   * Returns true if element is within 15% and 1000px of document bottom.
+   * Caller can provide current/initial layout boxes as an optimization.
+   * @param {!./resource.Resource} resource
+   * @param {!../layout-rect.LayoutRectDef=} opt_layoutBox
+   * @param {!../layout-rect.LayoutRectDef=} opt_initialLayoutBox
+   * @return {boolean}
+   * @private
+   */
+  elementNearBottom_(resource, opt_layoutBox, opt_initialLayoutBox) {
+    const contentHeight = this.viewport_.getContentHeight();
+    const threshold = Math.max(contentHeight * 0.85, contentHeight - 1000);
+
+    const box = opt_layoutBox || resource.getLayoutBox();
+    const initialBox = opt_initialLayoutBox || resource.getInitialLayoutBox();
+    return box.bottom >= threshold || initialBox.bottom >= threshold;
+  }
+
+  /**
+   * Returns true if reflow will not be caused by expanding the given element's
+   * width to the given amount.
+   * @param {!Element} element
+   * @param {number} width
+   * @return {boolean}
+   */
+  isWidthOnlyReflowFreeExpansion_(element, width) {
+    const parent = element.parentElement;
+    // If the element has siblings, it's possible that a width-expansion will
+    // cause some of them to be pushed down.
+    if (!parent || parent.childElementCount > 1) {
+      return false;
+    }
+    const parentWidth =
+      (parent.getImpl && parent.getImpl().getLayoutWidth()) || -1;
+    // Reflow will not happen if the parent element is at least as wide as the
+    // new width.
+    return parentWidth >= width;
+  }
+
+  /**
    * @param {!./task-queue.TaskDef} task
    * @private
    */
@@ -1599,160 +1387,6 @@ export class ResourcesImpl {
       );
       return Promise.reject(opt_reason);
     }
-  }
-
-  /**
-   * Schedules change of the element's height.
-   * @param {!Resource} resource
-   * @param {number|undefined} newHeight
-   * @param {number|undefined} newWidth
-   * @param {!../layout-rect.LayoutMarginsChangeDef|undefined} newMargins
-   * @param {?Event|undefined} event
-   * @param {boolean} force
-   * @param {function(boolean)=} opt_callback A callback function
-   * @private
-   */
-  scheduleChangeSize_(
-    resource,
-    newHeight,
-    newWidth,
-    newMargins,
-    event,
-    force,
-    opt_callback
-  ) {
-    if (resource.hasBeenMeasured() && !newMargins) {
-      this.completeScheduleChangeSize_(
-        resource,
-        newHeight,
-        newWidth,
-        undefined,
-        event,
-        force,
-        opt_callback
-      );
-    } else {
-      // This is a rare case since most of times the element itself schedules
-      // resize requests. However, this case is possible when another element
-      // requests resize of a controlled element. This also happens when a
-      // margin size change is requested, since existing margins have to be
-      // measured in this instance.
-      this.vsync_.measure(() => {
-        if (!resource.hasBeenMeasured()) {
-          resource.measure();
-        }
-        const marginChange = newMargins
-          ? {
-              newMargins,
-              currentMargins: this.getLayoutMargins_(resource),
-            }
-          : undefined;
-        this.completeScheduleChangeSize_(
-          resource,
-          newHeight,
-          newWidth,
-          marginChange,
-          event,
-          force,
-          opt_callback
-        );
-      });
-    }
-  }
-
-  /**
-   * Returns the layout margins for the resource.
-   * @param {!Resource} resource
-   * @return {!../layout-rect.LayoutMarginsDef}
-   * @private
-   */
-  getLayoutMargins_(resource) {
-    const style = computedStyle(this.win, resource.element);
-    return {
-      top: parseInt(style.marginTop, 10) || 0,
-      right: parseInt(style.marginRight, 10) || 0,
-      bottom: parseInt(style.marginBottom, 10) || 0,
-      left: parseInt(style.marginLeft, 10) || 0,
-    };
-  }
-
-  /**
-   * @param {!Resource} resource
-   * @param {number|undefined} newHeight
-   * @param {number|undefined} newWidth
-   * @param {!MarginChangeDef|undefined} marginChange
-   * @param {?Event|undefined} event
-   * @param {boolean} force
-   * @param {function(boolean)=} opt_callback A callback function
-   * @private
-   */
-  completeScheduleChangeSize_(
-    resource,
-    newHeight,
-    newWidth,
-    marginChange,
-    event,
-    force,
-    opt_callback
-  ) {
-    resource.resetPendingChangeSize();
-    const layoutBox = resource.getPageLayoutBox();
-    if (
-      (newHeight === undefined || newHeight == layoutBox.height) &&
-      (newWidth === undefined || newWidth == layoutBox.width) &&
-      (marginChange === undefined ||
-        !areMarginsChanged(
-          marginChange.currentMargins,
-          marginChange.newMargins
-        ))
-    ) {
-      if (
-        newHeight === undefined &&
-        newWidth === undefined &&
-        marginChange === undefined
-      ) {
-        dev().error(
-          TAG_,
-          'attempting to change size with undefined dimensions',
-          resource.debugid
-        );
-      }
-      // Nothing to do.
-      if (opt_callback) {
-        opt_callback(/* success */ true);
-      }
-      return;
-    }
-
-    let request = null;
-    for (let i = 0; i < this.requestsChangeSize_.length; i++) {
-      if (this.requestsChangeSize_[i].resource == resource) {
-        request = this.requestsChangeSize_[i];
-        break;
-      }
-    }
-
-    if (request) {
-      request.newHeight = newHeight;
-      request.newWidth = newWidth;
-      request.marginChange = marginChange;
-      request.event = event;
-      request.force = force || request.force;
-      request.callback = opt_callback;
-    } else {
-      this.requestsChangeSize_.push(
-        /** {!ChangeSizeRequestDef} */ {
-          resource,
-          newHeight,
-          newWidth,
-          marginChange,
-          event,
-          force,
-          callback: opt_callback,
-        }
-      );
-    }
-    this.schedulePassVsync_();
   }
 
   /**

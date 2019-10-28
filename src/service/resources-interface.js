@@ -14,8 +14,6 @@
  * limitations under the License.
  */
 
-import {MutatorInterface} from './mutator-interface';
-
 /** @const {string} */
 export const READY_SCAN_SIGNAL = 'ready-scan';
 
@@ -23,7 +21,7 @@ export const READY_SCAN_SIGNAL = 'ready-scan';
 /**
  * @interface
  */
-export class ResourcesInterface extends MutatorInterface {
+export class ResourcesInterface {
   /**
    * Returns a list of resources.
    * @return {!Array<!./resource.Resource>}
@@ -105,6 +103,11 @@ export class ResourcesInterface extends MutatorInterface {
    * @return {boolean}
    */
   schedulePass(opt_delay, opt_relayoutAll) {}
+
+  /**
+   * Schedules the work pass at the latest with the specified delay.
+   */
+  schedulePassVsync() {}
 
   /**
    * Registers a callback to be called when the next pass happens.
