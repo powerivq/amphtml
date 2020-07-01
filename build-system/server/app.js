@@ -67,12 +67,18 @@ app.use('/list/', require('./routes/list'));
 app.use('/test', require('./routes/test'));
 
 // Append ?csp=1 to the URL to turn on the CSP header.
+// Append ?admode= to the URL to set ad rendering mode. Options: client_cache, safeframe, nameframe, iframe_get
 // TODO: shall we turn on CSP all the time?
 app.use((req, res, next) => {
   if (req.query.csp) {
     res.set({
       'content-security-policy':
         "default-src * blob: data:; script-src https://cdn.ampproject.org/rtv/ https://cdn.ampproject.org/v0.js https://cdn.ampproject.org/v0/ https://cdn.ampproject.org/viewer/ http://localhost:8000 https://localhost:8000; object-src 'none'; style-src 'unsafe-inline' https://cdn.ampproject.org/rtv/ https://cdn.materialdesignicons.com https://cloud.typography.com https://fast.fonts.net https://fonts.googleapis.com https://maxcdn.bootstrapcdn.com https://p.typekit.net https://use.fontawesome.com https://use.typekit.net; report-uri https://csp-collector.appspot.com/csp/amp",
+    });
+  }
+  if (req.query.admode) {
+    res.set({
+      'X-AmpAdRender': req.query.admode,
     });
   }
   next();

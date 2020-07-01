@@ -603,14 +603,14 @@ export class AmpA4A extends AMP.BaseElement {
       );
       return false;
     }
-    if (!isAdPositionAllowed(this.element, this.win)) {
-      user().warn(
-        TAG,
-        `<${this.element.tagName}> is not allowed to be ` +
-          `placed in elements with position: fixed or sticky: ${this.element}`
-      );
-      return false;
-    }
+    // if (!isAdPositionAllowed(this.element, this.win)) {
+    //   user().warn(
+    //     TAG,
+    //     `<${this.element.tagName}> is not allowed to be ` +
+    //       `placed in elements with position: fixed or sticky: ${this.element}`
+    //   );
+    //   return false;
+    // }
     // OnLayoutMeasure can be called when page is in prerender so delay until
     // visible.  Assume that it is ok to call isValidElement as it should
     // only being looking at window, immutable properties (i.e. location) and
@@ -2243,6 +2243,7 @@ export class AmpA4A extends AMP.BaseElement {
    * @return {?XORIGIN_MODE}
    */
   getNonAmpCreativeRenderingMethod(headerValue) {
+    console.log('headerValue: ' + headerValue);
     if (headerValue) {
       if (!isEnumValue(XORIGIN_MODE, headerValue)) {
         dev().error(
