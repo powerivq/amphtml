@@ -435,6 +435,8 @@ export class AmpA4A extends AMP.BaseElement {
     }
 
     this.isSinglePageStoryAd = this.element.hasAttribute('amp-story');
+
+    this.uiHandler.maybeInitStickyAd();
   }
 
   /** @override */
@@ -1288,8 +1290,13 @@ export class AmpA4A extends AMP.BaseElement {
     }
     const checkStillCurrent = this.verifyStillCurrent();
     // Promise chain will have determined if creative is valid AMP.
-    return this.adPromise_
-      .then((creativeMetaData) => {
+
+    return Promise.all([
+      this.adPromise_,
+      this.uiHandler.getScrollPromiseForStickyAd(),
+    ])
+      .then((values) => {
+        const creativeMetaData = values[0];
         checkStillCurrent();
         if (this.isCollapsed_) {
           return Promise.resolve();
@@ -1432,6 +1439,9 @@ export class AmpA4A extends AMP.BaseElement {
     if (this.xOriginIframeHandler_) {
       this.xOriginIframeHandler_.freeXOriginIframe();
       this.xOriginIframeHandler_ = null;
+    }
+    if (this.uiHandler) {
+      this.uiHandler.cleanup();
     }
   }
 
