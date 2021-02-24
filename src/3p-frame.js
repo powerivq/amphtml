@@ -14,12 +14,14 @@
  * limitations under the License.
  */
 
+import {Services} from './services';
 import {assertHttpsUrl, parseUrlDeprecated} from './url';
 import {dev, devAssert, user, userAssert} from './log';
 import {dict} from './utils/object';
 import {getContextMetadata} from '../src/iframe-attributes';
 import {getMode} from './mode';
 import {internalRuntimeVersion} from './internal-version';
+import {isExperimentOn} from './experiments';
 import {setStyle} from './style';
 import {tryParseJson} from './json';
 import {urls} from './config';
@@ -69,9 +71,9 @@ function getFrameAttributes(parentWindow, element, opt_type, opt_context) {
  *   allowFullscreen: (boolean|undefined),
  *   initialIntersection: (IntersectionObserverEntry|undefined),
  * }=} options Options for the created iframe.
- * @return {!HTMLIFrameElement} The iframe.
+ * @return {!Promise<HTMLIFrameElement>} The iframe.
  */
-export function getIframe(
+export async function getIframe(
   parentWindow,
   parentElement,
   opt_type,
@@ -106,59 +108,60 @@ export function getIframe(
   count[attributes['type']] += 1;
 
   const ampdoc = parentElement.getAmpDoc();
-  const baseUrl = getBootstrapBaseUrl(parentWindow, ampdoc);
-  const host = parseUrlDeprecated(baseUrl).hostname;
-  // This name attribute may be overwritten if this frame is chosen to
-  // be the master frame. That is ok, as we will read the name off
-  // for our uses before that would occur.
-  // @see https://github.com/ampproject/amphtml/blob/master/3p/integration.js
-  const name = JSON.stringify(
-    dict({
-      'host': host,
-      'bootstrap': getBootstrapUrl(),
-      'type': attributes['type'],
-      // https://github.com/ampproject/amphtml/pull/2955
-      'count': count[attributes['type']],
-      'attributes': attributes,
-    })
-  );
+  return getBootstrapBaseUrl(parentWindow, ampdoc).then((baseUrl) => {
+    const host = parseUrlDeprecated(baseUrl).hostname;
+    // This name attribute may be overwritten if this frame is chosen to
+    // be the master frame. That is ok, as we will read the name off
+    // for our uses before that would occur.
+    // @see https://github.com/ampproject/amphtml/blob/master/3p/integration.js
+    const name = JSON.stringify(
+      dict({
+        'host': host,
+        'bootstrap': getBootstrapUrl(),
+        'type': attributes['type'],
+        // https://github.com/ampproject/amphtml/pull/2955
+        'count': count[attributes['type']],
+        'attributes': attributes,
+      })
+    );
 
-  iframe.src = baseUrl;
-  iframe.ampLocation = parseUrlDeprecated(baseUrl);
-  iframe.name = name;
-  // Add the check before assigning to prevent IE throw Invalid argument error
-  if (attributes['width']) {
-    iframe.width = attributes['width'];
-  }
-  if (attributes['height']) {
-    iframe.height = attributes['height'];
-  }
-  if (attributes['title']) {
-    iframe.title = attributes['title'];
-  }
-  if (allowFullscreen) {
-    iframe.setAttribute('allowfullscreen', 'true');
-  }
-  iframe.setAttribute('scrolling', 'no');
-  setStyle(iframe, 'border', 'none');
-  /** @this {!Element} */
-  iframe.onload = function () {
-    // Chrome does not reflect the iframe readystate.
-    this.readyState = 'complete';
-  };
-  // Block synchronous XHR in ad. These are very rare, but super bad for UX
-  // as they block the UI thread for the arbitrary amount of time until the
-  // request completes.
-  iframe.setAttribute('allow', "sync-xhr 'none';");
-  const excludeFromSandbox = ['facebook'];
-  if (!excludeFromSandbox.includes(opt_type)) {
-    applySandbox(iframe);
-  }
-  iframe.setAttribute(
-    'data-amp-3p-sentinel',
-    attributes['_context']['sentinel']
-  );
-  return iframe;
+    iframe.src = baseUrl;
+    iframe.ampLocation = parseUrlDeprecated(baseUrl);
+    iframe.name = name;
+    // Add the check before assigning to prevent IE throw Invalid argument error
+    if (attributes['width']) {
+      iframe.width = attributes['width'];
+    }
+    if (attributes['height']) {
+      iframe.height = attributes['height'];
+    }
+    if (attributes['title']) {
+      iframe.title = attributes['title'];
+    }
+    if (allowFullscreen) {
+      iframe.setAttribute('allowfullscreen', 'true');
+    }
+    iframe.setAttribute('scrolling', 'no');
+    setStyle(iframe, 'border', 'none');
+    /** @this {!Element} */
+    iframe.onload = function () {
+      // Chrome does not reflect the iframe readystate.
+      this.readyState = 'complete';
+    };
+    // Block synchronous XHR in ad. These are very rare, but super bad for UX
+    // as they block the UI thread for the arbitrary amount of time until the
+    // request completes.
+    iframe.setAttribute('allow', "sync-xhr 'none';");
+    const excludeFromSandbox = ['facebook'];
+    if (!excludeFromSandbox.includes(opt_type)) {
+      applySandbox(iframe);
+    }
+    iframe.setAttribute(
+      'data-amp-3p-sentinel',
+      attributes['_context']['sentinel']
+    );
+    return iframe;
+  });
 }
 
 /**
@@ -212,8 +215,9 @@ export function getBootstrapUrl() {
  * @param {!./preconnect.PreconnectService} preconnect
  */
 export function preloadBootstrap(win, ampdoc, preconnect) {
-  const url = getBootstrapBaseUrl(win, ampdoc);
-  preconnect.preload(ampdoc, url, 'document');
+  getBootstrapBaseUrl(win, ampdoc).then((url) => {
+    preconnect.preload(ampdoc, url, 'document');
+  });
 
   // While the URL may point to a custom domain, this URL will always be
   // fetched by it.
@@ -225,7 +229,7 @@ export function preloadBootstrap(win, ampdoc, preconnect) {
  * @param {!Window} parentWindow
  * @param {!./service/ampdoc-impl.AmpDoc} ampdoc
  * @param {boolean=} opt_strictForUnitTest
- * @return {string}
+ * @return {!Promise<string>}
  * @visibleForTesting
  */
 export function getBootstrapBaseUrl(
@@ -233,10 +237,15 @@ export function getBootstrapBaseUrl(
   ampdoc,
   opt_strictForUnitTest
 ) {
-  return (
-    getCustomBootstrapBaseUrl(parentWindow, ampdoc, opt_strictForUnitTest) ||
-    getDefaultBootstrapBaseUrl(parentWindow)
+  const customBootstrapBaseUrl = getCustomBootstrapBaseUrl(
+    parentWindow,
+    ampdoc,
+    opt_strictForUnitTest
   );
+  if (customBootstrapBaseUrl) {
+    return Promise.resolve(customBootstrapBaseUrl);
+  }
+  return getDefaultBootstrapBaseUrl(parentWindow);
 }
 
 /**
@@ -257,23 +266,33 @@ export function resetBootstrapBaseUrlForTesting(win) {
  * Returns the default base URL for 3p bootstrap iframes.
  * @param {!Window} parentWindow
  * @param {string=} opt_srcFileBasename
- * @return {string}
+ * @return {!Promise<string>}
  */
 export function getDefaultBootstrapBaseUrl(parentWindow, opt_srcFileBasename) {
   const srcFileBasename = opt_srcFileBasename || 'frame';
   if (getMode().localDev || getMode().test) {
-    return getDevelopmentBootstrapBaseUrl(parentWindow, srcFileBasename);
+    return Promise.resolve(
+      getDevelopmentBootstrapBaseUrl(parentWindow, srcFileBasename)
+    );
   }
   // Ensure same sub-domain is used despite potentially different file.
-  parentWindow.__AMP_DEFAULT_BOOTSTRAP_SUBDOMAIN =
-    parentWindow.__AMP_DEFAULT_BOOTSTRAP_SUBDOMAIN ||
-    getSubDomain(parentWindow);
-  return (
-    'https://' +
-    parentWindow.__AMP_DEFAULT_BOOTSTRAP_SUBDOMAIN +
-    `.${urls.thirdPartyFrameHost}/${internalRuntimeVersion()}/` +
-    `${srcFileBasename}.html`
-  );
+  return Promise.resolve()
+    .then(() => {
+      if (parentWindow.__AMP_DEFAULT_BOOTSTRAP_SUBDOMAIN) {
+        return Promise.resolve(parentWindow.__AMP_DEFAULT_BOOTSTRAP_SUBDOMAIN);
+      }
+      return getSubDomain(parentWindow).then((subdomain) => {
+        parentWindow.__AMP_DEFAULT_BOOTSTRAP_SUBDOMAIN = subdomain;
+        return subdomain;
+      });
+    })
+    .then(
+      (subdomain) =>
+        'https://' +
+        subdomain +
+        `.${urls.thirdPartyFrameHost}/${internalRuntimeVersion()}/` +
+        `${srcFileBasename}.html`
+    );
 }
 
 /**
@@ -311,11 +330,27 @@ function getAdsLocalhost(win) {
  * Because we only calculate the URL once per page, this function is only
  * called once and hence all frames on a page use the same URL.
  * @param {!Window} win
- * @return {string}
+ * @return {!Promise<string>}
  * @visibleForTesting
  */
 export function getSubDomain(win) {
-  return 'd-' + getRandom(win);
+  if (isExperimentOn(win, '3p-deterministic-subdomain')) {
+    return getDomainHash(win).then((hash) => 'h-' + hash);
+  }
+  return Promise.resolve('d-' + getRandom(win));
+}
+
+/**
+ * Generates the hash of the host's domain.
+ * Apply SHA384, and then convert it to lowercase and truncate it to 61 bytes
+ * since 63 bytes are the maximum subdomain ampproject.net supports.
+ * @param {!Window} win
+ * @return {!Promise<string>}
+ */
+export function getDomainHash(win) {
+  return Services.cryptoFor(win)
+    .sha384Base64(win.location.hostname)
+    .then((hash) => hash.toLower().substring(0, 61));
 }
 
 /**
