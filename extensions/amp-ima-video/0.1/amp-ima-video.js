@@ -213,8 +213,9 @@ class AmpImaVideo extends AMP.BaseElement {
         Services.videoManagerForDoc(element).register(this);
         observeContentSize(this.element, this.onResized_);
 
-        return this.loadPromise(iframe).then(() => this.playerReadyPromise_);
-      });
+        return this.loadPromise(iframe);
+      })
+      .then(() => this.playerReadyPromise_);
   }
 
   /** @override */

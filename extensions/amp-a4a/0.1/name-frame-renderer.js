@@ -48,7 +48,7 @@ export class NameFrameRenderer extends Renderer {
       utf8Decode(
         /** @type {!ArrayBuffer} */ (crossDomainData.rawCreativeBytes)
       );
-    const srcPathPromise = getDefaultBootstrapBaseUrl(context.win, 'nameframe');
+    const srcPath = getDefaultBootstrapBaseUrl(context.win, 'nameframe');
     const contextMetadata = getContextMetadata(
       context.win,
       element,
@@ -65,12 +65,12 @@ export class NameFrameRenderer extends Renderer {
     const intersectionPromise = asyncIntersection
       ? measureIntersection(element)
       : Promise.resolve(element.getIntersectionChangeEntry());
-    return Promise.all([srcPathPromise, intersectionPromise]).then((values) => {
+    return intersectionPromise.then((intersection) => {
       contextMetadata['_context'][
         'initialIntersection'
-      ] = intersectionEntryToJson(values[1]);
+      ] = intersectionEntryToJson(intersection);
       const attributes = dict({
-        'src': values[0],
+        'src': srcPath,
         'name': JSON.stringify(contextMetadata),
         'height': context.size.height,
         'width': context.size.width,

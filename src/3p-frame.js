@@ -245,7 +245,26 @@ export function getBootstrapBaseUrl(
   if (customBootstrapBaseUrl) {
     return Promise.resolve(customBootstrapBaseUrl);
   }
-  return getDefaultBootstrapBaseUrl(parentWindow);
+  if (getMode().localDev || getMode().test) {
+    return Promise.resolve(
+      getDevelopmentBootstrapBaseUrl(parentWindow, 'frame')
+    );
+  }
+  if (!isExperimentOn(parentWindow, '3p-deterministic-subdomain')) {
+    return Promise.resolve(getDefaultBootstrapBaseUrl(parentWindow));
+  }
+  return Promise.resolve()
+    .then(() =>
+      parentWindow.__AMP_3P_BOOTSTRAP_SUBDOMAIN
+        ? Promise.resolve(parentWindow.__AMP_3P_BOOTSTRAP_SUBDOMAIN)
+        : getDomainHash(parentWindow).then((hash) => 'h-' + hash)
+    )
+    .then((subdomain) => {
+      parentWindow.__AMP_3P_BOOTSTRAP_SUBDOMAIN = subdomain;
+      return `https://${subdomain}.${
+        urls.thirdPartyFrameHost
+      }/${internalRuntimeVersion()}/frame.html`;
+    });
 }
 
 /**
@@ -266,33 +285,23 @@ export function resetBootstrapBaseUrlForTesting(win) {
  * Returns the default base URL for 3p bootstrap iframes.
  * @param {!Window} parentWindow
  * @param {string=} opt_srcFileBasename
- * @return {!Promise<string>}
+ * @return {string}
  */
 export function getDefaultBootstrapBaseUrl(parentWindow, opt_srcFileBasename) {
   const srcFileBasename = opt_srcFileBasename || 'frame';
   if (getMode().localDev || getMode().test) {
-    return Promise.resolve(
-      getDevelopmentBootstrapBaseUrl(parentWindow, srcFileBasename)
-    );
+    return getDevelopmentBootstrapBaseUrl(parentWindow, srcFileBasename);
   }
   // Ensure same sub-domain is used despite potentially different file.
-  return Promise.resolve()
-    .then(() => {
-      if (parentWindow.__AMP_DEFAULT_BOOTSTRAP_SUBDOMAIN) {
-        return Promise.resolve(parentWindow.__AMP_DEFAULT_BOOTSTRAP_SUBDOMAIN);
-      }
-      return getSubDomain(parentWindow).then((subdomain) => {
-        parentWindow.__AMP_DEFAULT_BOOTSTRAP_SUBDOMAIN = subdomain;
-        return subdomain;
-      });
-    })
-    .then(
-      (subdomain) =>
-        'https://' +
-        subdomain +
-        `.${urls.thirdPartyFrameHost}/${internalRuntimeVersion()}/` +
-        `${srcFileBasename}.html`
-    );
+  parentWindow.__AMP_DEFAULT_BOOTSTRAP_SUBDOMAIN =
+    parentWindow.__AMP_DEFAULT_BOOTSTRAP_SUBDOMAIN ||
+    getSubDomain(parentWindow);
+  return (
+    'https://' +
+    parentWindow.__AMP_DEFAULT_BOOTSTRAP_SUBDOMAIN +
+    `.${urls.thirdPartyFrameHost}/${internalRuntimeVersion()}/` +
+    `${srcFileBasename}.html`
+  );
 }
 
 /**
@@ -330,14 +339,11 @@ function getAdsLocalhost(win) {
  * Because we only calculate the URL once per page, this function is only
  * called once and hence all frames on a page use the same URL.
  * @param {!Window} win
- * @return {!Promise<string>}
+ * @return {string}
  * @visibleForTesting
  */
 export function getSubDomain(win) {
-  if (isExperimentOn(win, '3p-deterministic-subdomain')) {
-    return getDomainHash(win).then((hash) => 'h-' + hash);
-  }
-  return Promise.resolve('d-' + getRandom(win));
+  return 'd-' + getRandom(win);
 }
 
 /**

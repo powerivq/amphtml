@@ -859,9 +859,10 @@ export class AmpA4A extends AMP.BaseElement {
         if (
           this.experimentalNonAmpCreativeRenderMethod_ == XORIGIN_MODE.NAMEFRAME
         ) {
-          getDefaultBootstrapBaseUrl(this.win, 'nameframe').then((url) => {
-            Services.preconnectFor(this.win).preload(this.getAmpDoc(), url);
-          });
+          Services.preconnectFor(this.win).preload(
+            this.getAmpDoc(),
+            getDefaultBootstrapBaseUrl(this.win, 'nameframe')
+          );
         }
         const safeframeVersionHeader = fetchResponse.headers.get(
           SAFEFRAME_VERSION_HEADER
@@ -2120,13 +2121,18 @@ export class AmpA4A extends AMP.BaseElement {
     );
     this.maybeTriggerAnalyticsEvent_('renderSafeFrameStart');
     const checkStillCurrent = this.verifyStillCurrent();
-    const srcPathPromise = Promise.resolve().then(() => {
+    return tryResolve(() => utf8Decode(creativeBody)).then((creative) => {
+      checkStillCurrent();
+      let srcPath;
+      let name = '';
       switch (method) {
         case XORIGIN_MODE.SAFEFRAME:
-          return Promise.resolve(this.getSafeframePath() + '?n=0');
+          srcPath = this.getSafeframePath() + '?n=0';
+          break;
         case XORIGIN_MODE.NAMEFRAME:
-          return getDefaultBootstrapBaseUrl(this.win, 'nameframe');
-        // Name will be set for real below in nameframe case.
+          srcPath = getDefaultBootstrapBaseUrl(this.win, 'nameframe');
+          // Name will be set for real below in nameframe case.
+          break;
         default:
           // Shouldn't be able to get here, but...  Because of the assert,
           // above, we can only get here in non-dev mode, so give user feedback.
@@ -2141,14 +2147,6 @@ export class AmpA4A extends AMP.BaseElement {
           );
           return Promise.reject('Unrecognized rendering mode request');
       }
-    });
-    return Promise.all([
-      srcPathPromise,
-      tryResolve(() => utf8Decode(creativeBody)),
-    ]).then((values) => {
-      checkStillCurrent();
-      let name = '';
-
       // TODO(bradfrizzell): change name of function and var
       let contextMetadata = getContextMetadata(
         this.win,
@@ -2168,16 +2166,16 @@ export class AmpA4A extends AMP.BaseElement {
           intersection
         );
         if (method == XORIGIN_MODE.NAMEFRAME) {
-          contextMetadata['creative'] = values[1];
+          contextMetadata['creative'] = creative;
           name = JSON.stringify(contextMetadata);
         } else if (method == XORIGIN_MODE.SAFEFRAME) {
           contextMetadata = JSON.stringify(contextMetadata);
           name =
-            `${this.safeframeVersion};${values[1].length};${values[1]}` +
+            `${this.safeframeVersion};${creative.length};${creative}` +
             `${contextMetadata}`;
         }
 
-        return this.iframeRenderHelper_(dict({'src': values[0], 'name': name}));
+        return this.iframeRenderHelper_(dict({'src': srcPath, 'name': name}));
       });
     });
   }

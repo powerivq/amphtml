@@ -596,9 +596,10 @@ export class AmpAdNetworkAdsenseImpl extends AmpA4A {
 
   /** @override */
   getPreconnectUrls() {
-    getDefaultBootstrapBaseUrl(this.win, 'nameframe').then((url) => {
-      Services.preconnectFor(this.win).preload(this.getAmpDoc(), url);
-    });
+    Services.preconnectFor(this.win).preload(
+      this.getAmpDoc(),
+      getDefaultBootstrapBaseUrl(this.win, 'nameframe')
+    );
     return ['https://googleads.g.doubleclick.net'];
   }
 
