@@ -73,7 +73,7 @@ function getFrameAttributes(parentWindow, element, opt_type, opt_context) {
  * }=} options Options for the created iframe.
  * @return {!Promise<HTMLIFrameElement>} The iframe.
  */
-export async function getIframe(
+export function getIframe(
   parentWindow,
   parentElement,
   opt_type,
@@ -213,15 +213,15 @@ export function getBootstrapUrl() {
  * @param {!Window} win
  * @param {!./service/ampdoc-impl.AmpDoc} ampdoc
  * @param {!./preconnect.PreconnectService} preconnect
+ * @return {!Promise}
  */
 export function preloadBootstrap(win, ampdoc, preconnect) {
-  getBootstrapBaseUrl(win, ampdoc).then((url) => {
-    preconnect.preload(ampdoc, url, 'document');
-  });
-
   // While the URL may point to a custom domain, this URL will always be
   // fetched by it.
   preconnect.preload(ampdoc, getBootstrapUrl(), 'script');
+  return getBootstrapBaseUrl(win, ampdoc).then((url) => {
+    preconnect.preload(ampdoc, url, 'document');
+  });
 }
 
 /**
