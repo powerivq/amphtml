@@ -223,6 +223,12 @@ Type attribute value: `googleanalytics`
 
 Adds support for Google Analytics. More details for adding Google Analytics support can be found at [developers.google.com](https://developers.google.com/analytics/devguides/collection/amp-analytics/).
 
+### Google Analytics 4</a>
+
+Type attribute value: `googleanalytics4`
+
+Google Analytics 4 is the new generation of Google Analytics. It will be the new way to supply data to Google Analytics. More details for adding Google Analytics 4 support can be found at [Google Analytics](http://fixme).
+
 ### gtag
 
 Type attribute value: `gtag`
