@@ -349,6 +349,75 @@ describes.realWin(
       );
     });
 
+    it('should reject exit URLs with an invalid protocol', async () => {
+      const el = await makeElementWithConfig({
+        targets: {
+          js: {'finalUrl': /* eslint no-script-url: 0 */ 'javascript:alert(1)'},
+          data: {'finalUrl': 'data:text/html,<script>alert(1)</script>'},
+        },
+      });
+      const open = env.sandbox.stub(win, 'open');
+      const impl = await el.getImpl();
+
+      allowConsoleError(() =>
+        impl.executeAction({
+          method: 'exit',
+          args: {target: 'js'},
+          event: makeClickEvent(1001),
+          satisfiesTrust: () => true,
+        })
+      );
+      allowConsoleError(() =>
+        impl.executeAction({
+          method: 'exit',
+          args: {target: 'data'},
+          event: makeClickEvent(1001),
+          satisfiesTrust: () => true,
+        })
+      );
+
+      expect(open).to.not.have.been.called;
+      win.document.body.removeChild(el);
+    });
+
+    it('should use tracking URLs and numeric status with legacy conversion config', async () => {
+      const open = env.sandbox.stub(win, 'open').returns(win);
+      const sendBeacon = env.sandbox
+        .stub(win.navigator, 'sendBeacon')
+        .returns(true);
+      const el = await makeElementWithConfig({
+        targets: {
+          landingPage: {
+            finalUrl:
+              'https://advertiser.example?status=ATTRIBUTION_REPORTING_STATUS',
+            trackingUrls: [
+              'https://tracker.example?status=ATTRIBUTION_REPORTING_STATUS',
+            ],
+            behaviors: {
+              browserAdConversion: {attributionsrc: 'https://adtech.example'},
+            },
+          },
+        },
+      });
+      const impl = await el.getImpl();
+      impl.executeAction({
+        method: 'exit',
+        args: {target: 'landingPage'},
+        event: makeClickEvent(1001),
+        satisfiesTrust: () => true,
+      });
+      expect(open).to.have.been.calledWithExactly(
+        'https://advertiser.example?status=4',
+        '_blank',
+        ''
+      );
+      expect(sendBeacon).to.have.been.calledOnce;
+      expect(sendBeacon).to.have.been.calledWithExactly(
+        'https://tracker.example?status=4',
+        ''
+      );
+    });
+
     it('should ping tracking URLs with sendBeacon', async () => {
       const open = env.sandbox.stub(win, 'open').callsFake(() => {
         return {name: 'fakeWin'};

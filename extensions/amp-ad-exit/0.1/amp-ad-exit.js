@@ -87,9 +87,6 @@ export class AmpAdExit extends AMP.BaseElement {
 
     /** @private @const {!{[key: string]: string}} */
     this.expectedOriginToVendor_ = {};
-
-    /** @private @const {boolean} */
-    this.isAttributionReportingSupported_ = false;
   }
 
   /**
@@ -140,6 +137,10 @@ export class AmpAdExit extends AMP.BaseElement {
         .map(substituteVariables)
         .forEach((url) => this.pingTrackingUrl_(url));
     }
+    if (!Services.urlForDoc(this.element).isProtocolValid(target.finalUrl)) {
+      user().error(TAG, 'Invalid exit URL protocol: ' + target.finalUrl);
+      return;
+    }
     const finalUrl = substituteVariables(target.finalUrl);
     // TODO(wg-monetization): clean up unused HostServices.
     if (HostServices.isAvailable(this.getAmpDoc())) {
@@ -185,9 +186,8 @@ export class AmpAdExit extends AMP.BaseElement {
    */
   getUrlVariableRewriter_(args, event, target) {
     const substitutionFunctions = {
-      'ATTRIBUTION_REPORTING_STATUS': () =>
-        // ARA removed
-        this.isAttributionReportingSupported_,
+      // Preserve the numeric macro value for existing exit URLs.
+      'ATTRIBUTION_REPORTING_STATUS': () => 4,
       'CLICK_X': () => event.clientX,
       'CLICK_Y': () => event.clientY,
     };

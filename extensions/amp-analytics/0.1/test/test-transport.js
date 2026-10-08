@@ -78,6 +78,21 @@ describes.realWin(
       expectNoXhr();
     });
 
+    it('ignores attribution options without expanding unrelated pixel macros', () => {
+      setupStubs(true, true);
+      sendRequest(
+        win,
+        'https://example.test/test?status=ATTRIBUTION_REPORTING_STATUS&r=RANDOM',
+        {
+          image: true,
+          attributionsrc: 'https://adtech.example',
+        }
+      );
+      expectImagePixel('https://example.test/test?status=0&r=RANDOM');
+      expectNoBeacon();
+      expectNoXhr();
+    });
+
     it('falls back to image setting suppressWarnings to true', () => {
       setupStubs(true, true);
       sendRequest(win, 'https://example.test/test', {

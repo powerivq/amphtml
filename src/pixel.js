@@ -30,7 +30,6 @@ export function createPixel(win, src, referrerPolicy, opt_elementOrAmpDoc) {
 /**
  * @param {!Window} win
  * @param {string} src
-
  * @param {(Element|./service/ampdoc-impl.AmpDoc)=} opt_elementOrAmpDoc Whether services are provided by an
  *     element.
  * @return {!Element}
@@ -66,7 +65,6 @@ function createNoReferrerPixel(win, src, opt_elementOrAmpDoc) {
  * @param {!Window} win
  * @param {string} src
  * @param {boolean=} noReferrer
-
  * @param {(Element|./service/ampdoc-impl.AmpDoc)=} opt_elementOrAmpDoc Whether services are provided by an
  *     element.
  * @return {!Image}
@@ -81,7 +79,12 @@ function createImagePixel(win, src, noReferrer = false, opt_elementOrAmpDoc) {
   const replacements = Services.urlReplacementsForDoc(
     opt_elementOrAmpDoc || win.document
   );
-  src = replacements.expandUrlSync(src);
+  // Keep existing pixel URLs compatible without expanding unrelated macros.
+  src = replacements.expandUrlSync(
+    src,
+    {'ATTRIBUTION_REPORTING_STATUS': () => 0},
+    {'ATTRIBUTION_REPORTING_STATUS': true}
+  );
   image.src = src;
   return image;
 }

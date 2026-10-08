@@ -35,7 +35,6 @@ describes.realWin('amp-pixel', {amp: true}, (env) => {
 
   /**
    * @param {string=} opt_src
-   * @param {string=} opt_attributionsrc
    * @return {!Promise<?Image>}
    */
   function trigger(opt_src) {
@@ -80,6 +79,21 @@ describes.realWin('amp-pixel', {amp: true}, (env) => {
         'https://pubads.g.doubleclick.net/activity;dc_iu=1/abc;ord=1?'
       );
     });
+  });
+
+  it('should ignore legacy attribution configuration', async () => {
+    pixel.setAttribute('attributionsrc', 'https://adtech.example');
+    const img = await trigger('https://example.test/pixel');
+    expect(img.getAttribute('attributionsrc')).to.be.null;
+    expect(img.src).to.equal('https://example.test/pixel');
+    expect(Services.urlReplacementsForDoc).to.have.been.calledWith(pixel);
+  });
+
+  it('should preserve the numeric attribution status macro', async () => {
+    const img = await trigger(
+      'https://example.test/pixel?status=ATTRIBUTION_REPORTING_STATUS'
+    );
+    expect(img.src).to.equal('https://example.test/pixel?status=0');
   });
 
   it('should allow protocol-relative URLs', () => {

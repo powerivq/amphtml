@@ -193,6 +193,12 @@ describes.sandboxed('DOMPurify-based', {}, (env) => {
       expect(rewriteAttributeValueSpy.callCount).to.be.equal(1);
     });
 
+    it('should output "expanded" attribute', () => {
+      expect(purify('<section expanded>Header</section>')).to.equal(
+        '<section expanded="">Header</section>'
+      );
+    });
+
     it('should default target to _top with href', () => {
       // Can't use string equality since DOMPurify will reorder attributes.
       const actual = serialize(
@@ -582,6 +588,14 @@ describes.sandboxed('DOMPurify-based', {}, (env) => {
         allowConsoleError(() => {
           expect(
             purify('<div style="color:blue!important">Test</div>')
+          ).to.equal('<div>Test</div>');
+        });
+      });
+
+      it('should ignore styles containing spaced `! important`', () => {
+        allowConsoleError(() => {
+          expect(
+            purify('<div style="color:blue ! important">Test</div>')
           ).to.equal('<div>Test</div>');
         });
       });

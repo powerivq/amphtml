@@ -918,7 +918,7 @@ describes.realWin('amp-a4a', {amp: true}, (env) => {
         a4a.onLayoutMeasure();
         await a4a.layoutCallback();
         verifyCachedContentIframeRender(a4aElement, TEST_URL, true);
-        expect(a4a.iframe.getAttribute('allow')).to.include("sync-xhr 'none';");
+        expect(a4a.iframe.getAttribute('allow')).to.equal("sync-xhr 'none';");
       });
     });
 
